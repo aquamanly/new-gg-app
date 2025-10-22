@@ -81,9 +81,36 @@ export default function GMap({ navigation, route }) {
     const [selectedLocation, setSelectedLocation] = useState(null); // Stores lat/lon/address for log
 
     /**
-     * Fetches ALL activity logs for the current user and stores them in allUserPins.
+     * Fetches ALL activity logs for the current user and stores them in allUserPins. 
+     * But it only does it once. So I need to make it so that it runs every time it's successfull with the additional save. 
+     * Maybe theres a way to clear the data before  running this. Hmmm...
+     * @todo: investigate the refresh on this.
      */
-    useEffect(() => {
+
+    // Add this helper function outside of the first useEffect
+const fetchExistingPins = async () => {
+    try {
+        const { data, error } = await supabase
+            .from('activity_logs')
+            .select('*')
+            .order('logged_at', { ascending: false });
+
+        if (error) {
+            console.error('Error fetching existing pins:', error);
+            return;
+        }
+        setExistingPins(data || []);
+    } catch (err) {
+        console.error('Unexpected error fetching pins:', err);
+    }
+};
+
+// Replace the first useEffect with a simple call:
+useEffect(() => {
+    fetchExistingPins();
+    // You might need to add fetchExistingPins to dependencies if you use useCallback, but for now, keep it simple.
+}, []);
+    /* useEffect(() => {
         const fetchExistingPins = async () => {
             try {
                 const { data, error } = await supabase
@@ -103,10 +130,13 @@ export default function GMap({ navigation, route }) {
         };
 
         fetchExistingPins();
-    }, []);
+    }, []); */
 
 
     // --- A. Setup and Location Logic ---
+    /**
+     * So once the app boots, it looks for your location and sets it. Thats it. 
+     */
     useEffect(() => {
         // 1. Fetch Session
         supabase.auth.getSession().then(({ data: { session } }) => {
@@ -131,17 +161,22 @@ export default function GMap({ navigation, route }) {
             }
         })();
     }, []);
+
     // --- B. Activity Logic ---
     // New handler to toggle an option in the array (from LogActivity)
     const toggleActivity = useCallback((option) => {
         setSelectedActivity((prevActivities) => {
-            if (prevActivities.includes(option)) {
-                return prevActivities.filter((item) => item !== option);
+            // 🚨 ADD THIS LINE 🚨
+            const activities = prevActivities || []; // Failsafe: Use [] if prevActivities is null/undefined
+
+            if (activities.includes(option)) {
+                return activities.filter((item) => item !== option);
             } else {
-                return [...prevActivities, option];
+                return [...activities, option];
             }
         });
     }, []);
+
     // 2. Form Submission (Supabase)
     const handleSubmit = useCallback(async () => {
         if (selectedActivity.length === 0 || !selectedLocation || !session) {
@@ -170,6 +205,7 @@ export default function GMap({ navigation, route }) {
                 throw new Error(`Supabase Error: ${error.message}`);
             }
             showMessage('Activity logged successfully!', 'success');
+            await fetchExistingPins(); // ✅ Refresh the map pins!
             // Reset state and hide overlay after successful submission
             setSelectedActivity([]);
             setShowActivityOverlay(false);
@@ -181,8 +217,14 @@ export default function GMap({ navigation, route }) {
             setSubmitting(false);
         }
     }, [selectedActivity, selectedLocation, session]);
+    /**
+     * const response = await supabase
+      .from('countries')
+      .delete()
+      .eq('id', 1)
+     */
 
-    const handleUpdate = useCallback(async () => {
+    const handleDelete = useCallback(async () => {
         if (selectedActivity.length === 0 || !selectedLocation || !session) {
             showMessage(
                 'Please select at least one activity and ensure a location is selected.',
@@ -190,36 +232,38 @@ export default function GMap({ navigation, route }) {
             );
             return;
         }
-    
+
         if (!selectedPinId) {  // 👈 This is the ID of the record you're editing
             showMessage('No activity selected to edit.', 'error');
             return;
         }
-    
+
         setSubmitting(true);
-    
+
         const updatedData = {
             user_id: session.user.id,
             user_email: session.user.email,
-            latitude: selectedLocation.latitude,
-            longitude: selectedLocation.longitude,
-            activity_type: selectedActivity,
-            logged_at: new Date().toISOString(),
-            address: selectedLocation.address || 'Coordinates Only',
+            activity_type: selectedActivity.toString(),
         };
-    
+
         try {
-            const { error } = await supabase
+            /*        = await supabase
+                       .from('activity_logs')
+                       .update(updatedData) // <-- FIXED
+                       .eq('id', selectedPinId).select(); */
+
+            const   {  error } = await supabase
                 .from('activity_logs')
-                .update(updatedData)
-                .eq('id', selectedPinId); // 👈 Match the record you want to edit
-    
+                .delete()
+                .eq('id', selectedPinId)
+
             if (error) {
+                showMessage(`Supabase Error: ${error.message}`, 'error');
                 throw new Error(`Supabase Error: ${error.message}`);
             }
-    
-            showMessage('Activity updated successfully!', 'success');
-    
+
+            showMessage('Pin Deleted!', 'success');
+            await fetchExistingPins(); // ✅ Refresh the map pins!
             // Reset state and close overlay after successful update
             setSelectedActivity([]);
             setShowActivityOverlay(false);
@@ -235,7 +279,60 @@ export default function GMap({ navigation, route }) {
         }
     }, [selectedActivity, selectedLocation, session]);
 
-   
+
+
+
+    const handleUpdate = useCallback(async () => {
+        if (selectedActivity.length === 0 || !selectedLocation || !session) {
+            showMessage(
+                'Please select at least one activity and ensure a location is selected.',
+                'error'
+            );
+            return;
+        }
+
+        if (!selectedPinId) {  // 👈 This is the ID of the record you're editing
+            showMessage('No activity selected to edit.', 'error');
+            return;
+        }
+
+        setSubmitting(true);
+
+        const updatedData = {
+            user_id: session.user.id,
+            user_email: session.user.email,
+            activity_type: selectedActivity,
+        };
+
+        try {
+            const { data, error } = await supabase
+                .from('activity_logs')
+                .update(updatedData) // <-- FIXED
+                .eq('id', selectedPinId).select();
+
+            if (error) {
+                showMessage(`Supabase Error: ${error.message}`, 'error');
+                throw new Error(`Supabase Error: ${error.message}`);
+            }
+
+            showMessage('Activity updated successfully!', 'success');
+            await fetchExistingPins(); // ✅ Refresh the map pins!
+            // Reset state and close overlay after successful update
+            setSelectedActivity([]);
+            setShowActivityOverlay(false);
+            setSelectedLocation(null);
+            setSelectedPinId(null);
+            setSelectedPin(null);
+
+        } catch (e) {
+            console.error('Supabase Update Error:', e);
+            showMessage(`Update Failed: ${e.message}`, 'error');
+        } finally {
+            setSubmitting(false);
+        }
+    }, [selectedActivity, selectedLocation, session]);
+
+
     // --- C. Map Interaction Logic ---
     const handleLongPress = useCallback(async (e) => {
         const { latitude, longitude } = e.nativeEvent.coordinate;
@@ -336,21 +433,40 @@ export default function GMap({ navigation, route }) {
                     </View>
                     {/* Action Buttons */}
                     {selectedPinId ? (
-    <Button
-        title={submitting ? 'Updating...' : 'Update Activity Log'}
-        onPress={handleUpdate}
-        disabled={submitting || selectedActivity.length === 0}
-        color={submitting || selectedActivity.length === 0 ? '#a1a1aa' : '#3b82f6'}
-    />
-) : (
-    <Button
-        title={submitting ? 'Sending...' : 'Send Activity Log'}
-        onPress={handleSubmit}
-        disabled={submitting || selectedActivity.length === 0}
-        color={submitting || selectedActivity.length === 0 ? '#a1a1aa' : '#3b82f6'}
-    />
-)}
+                        
+                            <Button
+                                title={submitting ? 'Updating...' : 'Update Activity Log'}
+                                onPress={handleUpdate}
+                                disabled={submitting || selectedActivity.length === 0}
+                                color={submitting || selectedActivity.length === 0 ? '#a1a1aa' : '#3b82f6'}
+                            />
+                         
+                    ) : (
+                        <Button
+                            title={submitting ? 'Sending...' : 'Send Activity Log'}
+                            onPress={handleSubmit}
+                            disabled={submitting || selectedActivity.length === 0}
+                            color={submitting || selectedActivity.length === 0 ? '#a1a1aa' : '#3b82f6'}
+                        />
+                    )}
 
+            {selectedPinId ? (
+                        
+                        <Button
+                            title={submitting ? 'Deleting...' : 'Delete Activity Log'}
+                            onPress={handleDelete}
+                            disabled={submitting || selectedActivity.length === 0}
+                            color={submitting || selectedActivity.length === 0 ? '#a1a1aa' : '#3b82f6'}
+                        />
+                     
+                ) : (
+                    <Button
+                        title={submitting ? 'Sending...' : 'Send Activity Log'}
+                        onPress={handleSubmit}
+                        disabled={submitting || selectedActivity.length === 0}
+                        color={submitting || selectedActivity.length === 0 ? '#a1a1aa' : '#3b82f6'}
+                    />
+                )}
 
                     <View style={{ marginTop: 10 }}>
                         <Button
