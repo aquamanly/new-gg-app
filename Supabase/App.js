@@ -11,6 +11,7 @@ import Redirect from './Redirect'; // Handles the initial Signin/Home switch
 import Home from './Home';
 import LogActivity from './KnockInput'; // Assuming this is the correct path/name
 import Playtime from './playtime';
+import GMap from './GMap';
 
 // 3. CREATE STACK NAVIGATOR INSTANCE
 const Stack = createNativeStackNavigator();
@@ -34,7 +35,12 @@ function AppStack() {
         component={Redirect}
         options={{ headerShown: false }}
       />
-
+      
+      <Stack.Screen
+        name="GMap"
+        component={GMap}
+        options={{ headerShown:  'Maps' }}
+      />
       {/* The Home screen (Dashboard)
         This is where your Home component is rendered and receives the 'navigation' prop.
       */}

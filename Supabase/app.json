@@ -13,14 +13,25 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "config": {
+        // IMPORTANT: Add the iOS key here if you are using Google Maps on iOS
+        "googleMapsApiKey": "YOUR_IOS_GOOGLE_MAPS_API_KEY" 
+      }
     },
     "android": {
+      // These keys should be direct children of the 'android' object
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      // The map configuration goes inside the 'config' object
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyBsv6-F6ymEOpJ6jdB6OIxCiX8tas2G6Y8" 
+        }
+      }
     },
     "web": {
       "favicon": "./assets/favicon.png"
