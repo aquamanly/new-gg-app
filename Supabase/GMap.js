@@ -1,4 +1,5 @@
 import * as Location from 'expo-location';
+import { Switch } from 'react-native'; // 🚨 IMPORT Switch
 import React, { useState, useEffect, useCallback } from 'react';
 import {
     View,
@@ -10,7 +11,7 @@ import {
     Platform,
     TouchableOpacity, // Used for the activity buttons
 } from 'react-native';
-import MapView, { Marker } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import * as Clipboard from 'expo-clipboard';
 import { supabase } from './supabase'; // Import supabase for submission
 import { MaterialIcons } from '@expo/vector-icons';
@@ -73,13 +74,21 @@ export default function GMap({ navigation, route }) {
     const [existingPins, setExistingPins] = useState([]);
     const [selectedPin, setSelectedPin] = useState(null);
     const [selectedPinId, setSelectedPinId] = useState(null);
+    const [mapRegion, setMapRegion] = useState(initialMapRegion); // 🚨 NEW: To track the map's current center/zoom
+    const [filteredPins, setFilteredPins] = useState([]);      // 🚨 NEW: The pins currently being rendered
 
     // Activity Log States
     const [selectedActivity, setSelectedActivity] = useState([]);
     const [submitting, setSubmitting] = useState(false);
     const [showActivityOverlay, setShowActivityOverlay] = useState(false);
     const [selectedLocation, setSelectedLocation] = useState(null); // Stores lat/lon/address for log
+    const [deleting, setDeleting] = useState(false);
 
+    // UI Control States
+const [filterMode, setFilterMode] = useState('view');     // 🚨 NEW: 'view' (map screen) or 'nearby' (2-mile radius)
+const [showAllPins, setShowAllPins] = useState(true);     // 🚨 NEW: Toggle switch state (ON/OFF)
+
+    const mapRef = React.useRef(null); // Use a ref to control the map component
     /**
      * Fetches ALL activity logs for the current user and stores them in allUserPins. 
      * But it only does it once. So I need to make it so that it runs every time it's successfull with the additional save. 
@@ -131,8 +140,49 @@ useEffect(() => {
 
         fetchExistingPins();
     }, []); */
-
-
+    const filterPins = useCallback(() => {
+        if (!existingPins || existingPins.length === 0 || !showAllPins) {
+            setFilteredPins([]);
+            return;
+        }
+    
+        let results = existingPins;
+    
+        if (filterMode === 'nearby' && currentLocation) {
+            const MAX_DISTANCE_MILES = 2;
+    
+            results = existingPins.filter(pin => {
+                return getDistance(
+                    currentLocation.latitude,
+                    currentLocation.longitude,
+                    pin.latitude,
+                    pin.longitude
+                ) <= MAX_DISTANCE_MILES;
+            });
+    
+        } else if (filterMode === 'view' && mapRegion) {
+            // Check if the pin's coordinates are within the mapRegion's bounding box
+            const maxLat = mapRegion.latitude + mapRegion.latitudeDelta / 2;
+            const minLat = mapRegion.latitude - mapRegion.latitudeDelta / 2;
+            const maxLon = mapRegion.longitude + mapRegion.longitudeDelta / 2;
+            const minLon = mapRegion.longitude - mapRegion.longitudeDelta / 2;
+    
+            results = existingPins.filter(pin => {
+                return (
+                    pin.latitude <= maxLat &&
+                    pin.latitude >= minLat &&
+                    pin.longitude <= maxLon &&
+                    pin.longitude >= minLon
+                );
+            });
+        }
+        
+        setFilteredPins(results);
+    
+    }, [existingPins, filterMode, currentLocation, mapRegion, showAllPins]);
+    useEffect(() => {
+        filterPins();
+    }, [filterPins]);
     // --- A. Setup and Location Logic ---
     /**
      * So once the app boots, it looks for your location and sets it. Thats it. 
@@ -238,13 +288,8 @@ useEffect(() => {
             return;
         }
 
-        setSubmitting(true);
+        setDeleting(true);
 
-        const updatedData = {
-            user_id: session.user.id,
-            user_email: session.user.email,
-            activity_type: selectedActivity.toString(),
-        };
 
         try {
             /*        = await supabase
@@ -275,7 +320,7 @@ useEffect(() => {
             console.error('Supabase Update Error:', e);
             showMessage(`Update Failed: ${e.message}`, 'error');
         } finally {
-            setSubmitting(false);
+            setDeleting(false);
         }
     }, [selectedActivity, selectedLocation, session]);
 
@@ -331,7 +376,30 @@ useEffect(() => {
             setSubmitting(false);
         }
     }, [selectedActivity, selectedLocation, session]);
+//New: RECENTER LOGIC
+const handleRecenter = useCallback(async () => {
+    if (mapRef.current && !isLoading) {
+        try {
+            // Re-fetch current location to ensure accuracy
+            let location = await Location.getCurrentPositionAsync({});
+            const { latitude, longitude } = location.coords;
 
+            // Animate map to the new region
+            mapRef.current.animateToRegion({
+                latitude,
+                longitude,
+                latitudeDelta: 0.0421, // Keep your current zoom level
+                longitudeDelta: 0.0421,
+            }, 1000); // 1000ms duration
+
+            setCurrentLocation(location.coords); // Update state if needed
+            showMessage('Map centered to your current GPS location.', 'success');
+        } catch (error) {
+            console.error("Recenter Error:", error);
+            showMessage('Could not get current location. Check GPS settings.', 'error');
+        }
+    }
+}, [isLoading]);
 
     // --- C. Map Interaction Logic ---
     const handleLongPress = useCallback(async (e) => {
@@ -433,13 +501,20 @@ useEffect(() => {
                     </View>
                     {/* Action Buttons */}
                     {selectedPinId ? (
-                        
+                        <>
                             <Button
                                 title={submitting ? 'Updating...' : 'Update Activity Log'}
                                 onPress={handleUpdate}
                                 disabled={submitting || selectedActivity.length === 0}
                                 color={submitting || selectedActivity.length === 0 ? '#a1a1aa' : '#3b82f6'}
                             />
+                            <Button
+                            title={deleting ? 'Deleting...' : 'Delete Activity Log'}
+                            onPress={handleDelete}
+                            disabled={deleting || selectedActivity.length === 0}
+                            color={deleting || selectedActivity.length === 0 ? '#a1a1aa' : '#dc2626'}
+                        />
+                            </>
                          
                     ) : (
                         <Button
@@ -450,13 +525,13 @@ useEffect(() => {
                         />
                     )}
 
-            {selectedPinId ? (
+            {/**selectedPinId ? (
                         
                         <Button
-                            title={submitting ? 'Deleting...' : 'Delete Activity Log'}
+                            title={deleting ? 'Deleting...' : 'Delete Activity Log'}
                             onPress={handleDelete}
-                            disabled={submitting || selectedActivity.length === 0}
-                            color={submitting || selectedActivity.length === 0 ? '#a1a1aa' : '#3b82f6'}
+                            disabled={deleting || selectedActivity.length === 0}
+                            color={deleting || selectedActivity.length === 0 ? '#a1a1aa' : '#3b82f6'}
                         />
                      
                 ) : (
@@ -466,7 +541,7 @@ useEffect(() => {
                         disabled={submitting || selectedActivity.length === 0}
                         color={submitting || selectedActivity.length === 0 ? '#a1a1aa' : '#3b82f6'}
                     />
-                )}
+                )*/}
 
                     <View style={{ marginTop: 10 }}>
                         <Button
@@ -486,6 +561,14 @@ useEffect(() => {
     };
     return (
         <View style={styles.container}>
+{/* 🚨 SIMPLIFIED Control Container */}
+<View style={styles.controlContainer}>
+            <Text style={styles.controlLabel}>Show Nearby Pins (2 Mi Radius):</Text>
+            <Switch
+                onValueChange={setShowAllPins}
+                value={showAllPins}
+            />
+        </View>
             <MapView
                 style={styles.map}
                 initialRegion={initialMapRegion}
@@ -493,8 +576,18 @@ useEffect(() => {
                 // Prevents map interaction while the overlay is visible
                 scrollEnabled={!showActivityOverlay}
                 zoomEnabled={!showActivityOverlay}
+                //NEW: position ref here
+                ref={mapRef} 
+                // 🚨 CRITICAL FIX: Add this line 🚨-- Shows Rep location at all times!
+                 showsUserLocation={true}
+                 // 🚨 Use the Google Maps provider
+            provider={PROVIDER_GOOGLE}
+            // 🚨 NEW: Update mapRegion state on movement end
+    onRegionChangeComplete={(region) => setMapRegion(region)}
             >
-                {existingPins.map((pin) => (
+                {/** removed existing pins */}
+                {/*{existingPins.map((pin) => (*/}
+                {filteredPins.map((pin) => (
                     <Marker
                         key={pin.id}
                         coordinate={{ latitude: pin.latitude, longitude: pin.longitude }}
@@ -512,6 +605,16 @@ useEffect(() => {
                         }}
                     />
                 ))}
+
+{/***NEW: Recenter Button */}
+                <TouchableOpacity 
+                            style={styles.recenterButton}
+                            onPress={handleRecenter}
+                            disabled={isLoading}
+                        >
+                            <MaterialIcons name="my-location" size={24} color="white" />
+                        </TouchableOpacity>
+
 
                 {/* Marker is always at the last selected or current location */}
                 {markerCoordinate && (
@@ -532,6 +635,20 @@ const styles = StyleSheet.create({
     container: {
         flex: 1,
         backgroundColor: '#f3f4f6',
+    },
+    recenterButton: {
+        position: 'absolute',
+        bottom: 40, // Adjust position from bottom
+        right: 20,  // Adjust position from right
+        backgroundColor: '#3b82f6', // Use your primary blue color
+        borderRadius: 30, // Make it a circle
+        padding: 12,
+        elevation: 5, // Android shadow
+        shadowColor: '#000', // iOS shadow
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 3.84,
+        zIndex: 10, // Ensure it's above the map
     },
     map: {
         flex: 1,
@@ -625,4 +742,40 @@ const styles = StyleSheet.create({
         maxHeight: '80%', // Limit height on smaller screens
     },
     // ... (Removed duplicate/unused styles from your original LogActivity)
+    // new styles for the switch for 2 mile radius
+    controlContainer: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        padding: 10,
+        backgroundColor: '#fff',
+        borderBottomWidth: 1,
+        borderBottomColor: '#ccc',
+    },
+    controlLabel: {
+        fontSize: 16,
+        fontWeight: 'bold',
+        marginRight: 10,
+    },
+    modeToggle: {
+        flexDirection: 'row',
+        borderRadius: 8,
+        borderWidth: 1,
+        borderColor: '#3b82f6',
+        overflow: 'hidden',
+    },
+    modeButton: {
+        paddingVertical: 8,
+        paddingHorizontal: 15,
+        backgroundColor: '#fff',
+    },
+    modeButtonSelected: {
+        backgroundColor: '#3b82f6',
+    },
+    modeText: {
+        fontSize: 14,
+        color: '#3b82f6',
+        fontWeight: '500',
+    },
+
 });
